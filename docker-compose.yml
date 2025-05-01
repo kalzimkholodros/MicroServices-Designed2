@@ -1,0 +1,126 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  product-service:
+    build:
+      context: .
+      dockerfile: microservices/ProductService/Dockerfile
+    ports:
+      - "5043:5043"
+    environment:
+      - ConnectionStrings__ProductDb=Host=postgres;Database=ProductDb;Username=postgres;Password=postgres
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  basket-service:
+    build:
+      context: .
+      dockerfile: microservices/BasketService/Dockerfile
+    ports:
+      - "5228:5228"
+    environment:
+      - Redis__ConnectionString=redis:6379
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+
+  order-service:
+    build:
+      context: .
+      dockerfile: microservices/OrderService/Dockerfile
+    ports:
+      - "5193:5193"
+    environment:
+      - ConnectionStrings__OrderDb=Host=postgres;Database=OrderDb;Username=postgres;Password=postgres
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+    depends_on:
+      - postgres
+      - rabbitmq
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: microservices/PaymentService/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - ConnectionStrings__PaymentDb=Host=postgres;Database=PaymentDb;Username=postgres;Password=postgres
+      - RabbitMQ__Host=rabbitmq
+      - RabbitMQ__Username=guest
+      - RabbitMQ__Password=guest
+    depends_on:
+      - postgres
+      - rabbitmq
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: YarpApiGateway/Dockerfile
+    ports:
+      - "5223:5223"
+    depends_on:
+      - product-service
+      - basket-service
+      - order-service
+      - payment-service
+
+volumes:
+  postgres-data:
+  redis-data: 
